@@ -34,6 +34,7 @@ module Kitchen
     # @author Sean OMeara <sean@sean.io>
     class Dokken < Kitchen::Driver::Base
       default_config :api_retries, 20
+      default_config :authenticate, false
       default_config :binds, []
       default_config :cap_add, nil
       default_config :cap_drop, nil
@@ -535,13 +536,38 @@ module Kitchen
         val.sub(%r{https?://}, '').split('/').first
       end
 
+      def docker_creds_store
+        require 'json'
+        docker_config_file = File.open("#{Dir.home}/.docker/config.json", &:read)
+        docker_config = JSON.parse(docker_config_file)
+        docker_config['credsStore']
+      end
+
+      def registry_credentials(image)
+        debug "Looking up credentials for #{image}"
+        registry_host = parse_registry_host(repo(image))
+        repo_credentials_stdout = `echo '#{registry_host}' | docker-credential-#{docker_creds_store} get`
+        return {} if repo_credentials_stdout =~ /credentials not found in native keychain/
+        repo_credentials = JSON.parse(repo_credentials_stdout)
+        {
+          'username' => repo_credentials['Username'],
+          'password' => repo_credentials['Secret'],
+          'serveraddress' => repo_credentials['ServerURL'],
+        }
+      end
+
       def pull_image(image)
+        creds = config[:authenticate] ? registry_credentials(image) : nil
         with_retries do
+          debug "Check image exists #{image}"
           if Docker::Image.exist?("#{repo(image)}:#{tag(image)}", {}, docker_connection)
             original_image = Docker::Image.get("#{repo(image)}:#{tag(image)}", {}, docker_connection)
           end
 
-          new_image = Docker::Image.create({ 'fromImage' => "#{repo(image)}:#{tag(image)}" }, docker_connection)
+          debug "Create image #{image}"
+          # TODO only attempt authentication on auth failure
+          # TODO error should suggest "docker login repo"
+          new_image = Docker::Image.create({ 'fromImage' => "#{repo(image)}:#{tag(image)}" }, creds, docker_connection)
 
           !(original_image && original_image.id.start_with?(new_image.id))
         end
