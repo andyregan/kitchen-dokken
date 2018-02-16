@@ -17,6 +17,7 @@
 
 require 'digest'
 require 'kitchen'
+require 'json'
 require 'tmpdir'
 require 'docker'
 require 'lockfile'
@@ -537,15 +538,13 @@ module Kitchen
       end
 
       def docker_creds_store
-        require 'json'
         docker_config_file = File.open("#{Dir.home}/.docker/config.json", &:read)
         docker_config = JSON.parse(docker_config_file)
         docker_config['credsStore']
       end
 
-      def registry_credentials(image)
-        debug "Looking up credentials for #{image}"
-        registry_host = parse_registry_host(repo(image))
+      def registery_credentials_from_credstore(registry_host)
+        return {} unless docker_creds_store
         repo_credentials_stdout = `echo '#{registry_host}' | docker-credential-#{docker_creds_store} get`
         return {} if repo_credentials_stdout =~ /credentials not found in native keychain/
         repo_credentials = JSON.parse(repo_credentials_stdout)
@@ -554,6 +553,12 @@ module Kitchen
           'password' => repo_credentials['Secret'],
           'serveraddress' => repo_credentials['ServerURL'],
         }
+      end
+
+      def registry_credentials(image)
+        debug "Looking up credentials for #{image}"
+        registry_host = parse_registry_host(repo(image))
+        registery_credentials_from_credstore(registry_host)
       end
 
       def pull_image(image)
